@@ -11,7 +11,8 @@ import {
   UserCircle,
   LogOut,
   Menu,
-  Sparkles
+  Sparkles,
+  CalendarDays,
 } from "lucide-react";
 import { useState } from "react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
@@ -26,6 +27,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     { href: "/expenses", label: "Expenses", icon: Receipt },
     { href: "/user-expenses", label: "User Expenses", icon: UserCircle },
     { href: "/settlements", label: "Settlements", icon: Scale },
+    { href: "/schedules", label: "Schedules", icon: CalendarDays },
     { href: "/cleaning-attendance", label: "Cleaning Attendance", icon: Sparkles },
     { href: "/profile", label: "My Profile", icon: UserCircle },
   ];

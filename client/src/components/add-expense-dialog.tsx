@@ -57,7 +57,7 @@ const expenseSchema = z.object({
 type ExpenseFormValues = z.infer<typeof expenseSchema>;
 
 export function AddExpenseDialog({ children }: { children?: React.ReactNode }) {
-  const { users, categories, currentUser, addExpense, isMonthLocked } = useApp();
+  const { users, categories, currentUser, addExpense, isMonthLocked, availableMonths, getDefaultExpenseDate } = useApp();
   const [open, setOpen] = useState(false);
 
   // ── Participant selection managed as plain React state ─────────────────────
@@ -72,7 +72,7 @@ export function AddExpenseDialog({ children }: { children?: React.ReactNode }) {
     defaultValues: {
       description: "",
       amount: 0,
-      date: new Date(),
+      date: getDefaultExpenseDate(),
       categoryId: categories[0]?.id || "",
       paidBy: currentUser?.id || "",
       splitType: "equal",
@@ -85,12 +85,13 @@ export function AddExpenseDialog({ children }: { children?: React.ReactNode }) {
   useEffect(() => {
     if (open && currentUser) {
       const initial = (users || []).map(u => u.id);
+      const initialDate = getDefaultExpenseDate();
       setSelectedIds(initial);
       setSplitData({});
       form.reset({
         description: "",
         amount: 0,
-        date: new Date(),
+        date: initialDate,
         categoryId: categories[0]?.id || "",
         paidBy: currentUser.id,
         splitType: "equal",
@@ -98,7 +99,7 @@ export function AddExpenseDialog({ children }: { children?: React.ReactNode }) {
         customSplits: {},
       });
     }
-  }, [open]); // Only react to dialog open/close
+  }, [open, currentUser, getDefaultExpenseDate]); // Only react to dialog open/close
 
   // Sync state → RHF form fields
   useEffect(() => {
@@ -124,6 +125,10 @@ export function AddExpenseDialog({ children }: { children?: React.ReactNode }) {
 
   const onSubmit = async (data: ExpenseFormValues) => {
     const month = format(data.date, "yyyy-MM");
+    if (!availableMonths.includes(month)) {
+      form.setError("date", { message: `Month ${month} has not been created by Admin yet.` });
+      return;
+    }
     if (isMonthLocked(month)) {
       form.setError("date", { message: "This month is locked and cannot be edited." });
       return;
@@ -288,9 +293,20 @@ export function AddExpenseDialog({ children }: { children?: React.ReactNode }) {
                         </FormControl>
                       </PopoverTrigger>
                       <PopoverContent className="w-auto p-0" align="start">
-                        <Calendar mode="single" selected={field.value} onSelect={field.onChange}
-                          disabled={date => date > new Date() || date < new Date("1900-01-01")}
-                          initialFocus />
+                        <Calendar
+                          mode="single"
+                          selected={field.value}
+                          onSelect={field.onChange}
+                          defaultMonth={field.value}
+                          disabled={(date) => {
+                            if (date > new Date() || date < new Date("1900-01-01")) return true;
+                            const m = format(date, "yyyy-MM");
+                            if (!availableMonths.includes(m)) return true;
+                            if (isMonthLocked(m)) return true;
+                            return false;
+                          }}
+                          initialFocus
+                        />
                       </PopoverContent>
                     </Popover>
                     <FormMessage />

@@ -28,12 +28,11 @@ import { Expense } from "@/lib/types";
 export default function ExpensesPage() {
   const {
     expenses, users, categories, currentUser,
-    deleteExpense, isMonthLocked, availableMonths, refreshState,
+    deleteExpense, isMonthLocked, availableMonths, activeMonth, refreshState,
   } = useApp();
 
   // ── Month selector — only shows admin-created months (no auto calendar month) ──
-  // For testing: default to 2026-01
-  const [selectedMonth, setSelectedMonth] = useState<string>('2026-01');
+  const [selectedMonth, setSelectedMonth] = useState<string>('');
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [expenseToEdit, setExpenseToEdit] = useState<Expense | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -60,16 +59,12 @@ export default function ExpensesPage() {
     }
   };
 
-  // Set default to 2026-01 for testing, then most recent available month
+  // Set default to active month (most recent unlocked month), or newest available month
   useEffect(() => {
-    if (availableMonths.length > 0 && !availableMonths.includes(selectedMonth)) {
-      if (availableMonths.includes('2026-01')) {
-        setSelectedMonth('2026-01');
-      } else {
-        setSelectedMonth(availableMonths[0]); // already sorted newest first
-      }
+    if (availableMonths.length > 0 && (!selectedMonth || !availableMonths.includes(selectedMonth))) {
+      setSelectedMonth(activeMonth || availableMonths[0]);
     }
-  }, [availableMonths]);
+  }, [availableMonths, activeMonth, selectedMonth]);
 
   const isLocked = selectedMonth ? isMonthLocked(selectedMonth) : false;
 

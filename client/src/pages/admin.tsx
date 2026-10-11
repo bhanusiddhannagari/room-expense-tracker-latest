@@ -22,8 +22,15 @@ import {
 } from "@/components/ui/alert-dialog";
 
 export default function AdminPage() {
-  const { categories, addCategory, deleteCategory, monthStatus, lockMonth, unlockMonth, deleteMonth, addMonth, users, addUser, removeUser, expenses, settlements, getActiveUsersByMonth, setActiveUsersByMonth } = useApp();
+  const {
+    categories, addCategory, deleteCategory,
+    scheduleCategories, addScheduleCategory, deleteScheduleCategory,
+    monthStatus, lockMonth, unlockMonth, deleteMonth, addMonth,
+    users, addUser, removeUser, expenses, settlements,
+    getActiveUsersByMonth, setActiveUsersByMonth
+  } = useApp();
   const [newCategory, setNewCategory] = useState("");
+  const [newScheduleCategory, setNewScheduleCategory] = useState("");
   const [newUserName, setNewUserName] = useState("");
   const [newUserPassword, setNewUserPassword] = useState("");
   const [newUserRole, setNewUserRole] = useState<"admin" | "member">("member");
@@ -49,6 +56,14 @@ export default function AdminPage() {
     if (newCategory.trim()) {
       addCategory(newCategory.trim());
       setNewCategory("");
+    }
+  };
+
+  const handleAddScheduleCategory = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newScheduleCategory.trim()) {
+      addScheduleCategory(newScheduleCategory.trim());
+      setNewScheduleCategory("");
     }
   };
 
@@ -245,6 +260,69 @@ export default function AdminPage() {
                         <AlertDialogAction
                           className="bg-destructive hover:bg-destructive/90"
                           onClick={() => deleteCategory(cat.id)}
+                        >
+                          Delete
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ── Schedule Categories ── */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Schedule Categories</CardTitle>
+            <CardDescription>Manage categories for calendar activities and chores.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <form onSubmit={handleAddScheduleCategory} className="flex gap-2">
+              <Input
+                placeholder="New Schedule Category"
+                value={newScheduleCategory}
+                onChange={(e) => setNewScheduleCategory(e.target.value)}
+              />
+              <Button type="submit" size="icon">
+                <Plus className="w-4 h-4" />
+              </Button>
+            </form>
+            <div className="flex flex-wrap gap-2">
+              {scheduleCategories.map(cat => (
+                <div
+                  key={cat.id}
+                  className="group flex items-center gap-1.5 px-3 py-1.5 bg-secondary rounded-full text-sm border border-transparent hover:border-destructive/30 transition-colors"
+                >
+                  <Tag className="w-3 h-3 text-muted-foreground" />
+                  <span>{cat.name}</span>
+                  {cat.isDefault && (
+                    <Badge variant="outline" className="text-[10px] h-4 px-1 ml-1 opacity-60">default</Badge>
+                  )}
+                  {/* Delete button with confirmation */}
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <button
+                        className="ml-1 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+                        title="Delete schedule category"
+                        type="button"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Delete Schedule Category?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          Are you sure you want to delete the schedule category <strong>"{cat.name}"</strong>?
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                          className="bg-destructive hover:bg-destructive/90"
+                          onClick={() => deleteScheduleCategory(cat.id)}
                         >
                           Delete
                         </AlertDialogAction>

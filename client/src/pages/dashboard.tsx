@@ -24,12 +24,11 @@ import ThemeToggle from "@/components/theme-toggle";
 export default function Dashboard() {
   const {
     expenses, currentUser, users, categories,
-    isMonthLocked, availableMonths, refreshState,
+    isMonthLocked, availableMonths, activeMonth, refreshState,
   } = useApp();
 
   // ── Month Selector (only admin-created months) ───────────────────────────────
-  // For testing: default to 2026-01
-  const [selectedMonth, setSelectedMonth] = useState<string>('2026-01');
+  const [selectedMonth, setSelectedMonth] = useState<string>('');
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const handleRefresh = async () => {
@@ -42,18 +41,12 @@ export default function Dashboard() {
     }
   };
 
-  // Default to 2026-01 for testing, then most recent unlocked month
+  // Default to active month (most recent unlocked month), or newest available month
   useEffect(() => {
-    if (availableMonths.length > 0 && !availableMonths.includes(selectedMonth)) {
-      // If 2026-01 is available, use it; otherwise prefer an unlocked month
-      if (availableMonths.includes('2026-01')) {
-        setSelectedMonth('2026-01');
-      } else {
-        const firstUnlocked = availableMonths.find(m => !isMonthLocked(m));
-        setSelectedMonth(firstUnlocked ?? availableMonths[0]);
-      }
+    if (availableMonths.length > 0 && (!selectedMonth || !availableMonths.includes(selectedMonth))) {
+      setSelectedMonth(activeMonth || availableMonths[0]);
     }
-  }, [availableMonths]);
+  }, [availableMonths, activeMonth, selectedMonth]);
 
   const isLocked = selectedMonth ? isMonthLocked(selectedMonth) : false;
 

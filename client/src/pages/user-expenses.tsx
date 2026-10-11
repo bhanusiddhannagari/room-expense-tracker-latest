@@ -11,24 +11,19 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 export default function UserExpensesPage() {
   const {
     expenses, users, categories,
-    availableMonths, isMonthLocked
+    availableMonths, activeMonth, isMonthLocked
   } = useApp();
 
-  // For testing: default to 2026-01
-  const [selectedMonth, setSelectedMonth] = useState<string>('2026-01');
+  const [selectedMonth, setSelectedMonth] = useState<string>('');
   const [selectedUserId, setSelectedUserId] = useState<string>('');
   const [viewMode, setViewMode] = useState<"all" | "payer">("all");
 
-  // Default to 2026-01 for testing, then most recent available month
+  // Default to active month (most recent unlocked month), or newest available month
   useEffect(() => {
-    if (availableMonths.length > 0 && !availableMonths.includes(selectedMonth)) {
-      if (availableMonths.includes('2026-01')) {
-        setSelectedMonth('2026-01');
-      } else {
-        setSelectedMonth(availableMonths[0]);
-      }
+    if (availableMonths.length > 0 && (!selectedMonth || !availableMonths.includes(selectedMonth))) {
+      setSelectedMonth(activeMonth || availableMonths[0]);
     }
-  }, [availableMonths]);
+  }, [availableMonths, activeMonth, selectedMonth]);
 
   useEffect(() => {
     if (users.length > 0 && !selectedUserId) {

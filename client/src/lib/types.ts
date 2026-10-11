@@ -68,3 +68,22 @@ export interface CleaningAttendance {
   createdAt: string;
 }
 
+export interface ScheduleCategory {
+  id: string;
+  name: string;
+  isDefault?: boolean;
+}
+
+export interface Schedule {
+  id: string;
+  title: string;
+  date: string; // YYYY-MM-DD
+  month: string; // YYYY-MM
+  startTime: string; // HH:mm
+  endTime?: string; // HH:mm
+  type: string;
+  description?: string;
+  createdBy: string; // userId
+  createdAt: string;
+}
+

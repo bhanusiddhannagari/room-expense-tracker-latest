@@ -14,6 +14,7 @@ import Admin from "@/pages/admin";
 import Profile from "@/pages/profile";
 import UserExpenses from "@/pages/user-expenses";
 import CleaningAttendance from "@/pages/cleaning-attendance";
+import Schedules from "@/pages/schedules";
 
 function ProtectedRoute({ component: Component, adminOnly = false }: { component: React.ComponentType, adminOnly?: boolean }) {
   const { currentUser } = useApp();
@@ -43,6 +44,7 @@ function Router() {
       <Route path="/expenses" component={() => <ProtectedRoute component={Expenses} />} />
       <Route path="/user-expenses" component={() => <ProtectedRoute component={UserExpenses} />} />
       <Route path="/settlements" component={() => <ProtectedRoute component={Settlements} />} />
+      <Route path="/schedules" component={() => <ProtectedRoute component={Schedules} />} />
       <Route path="/cleaning-attendance" component={() => <ProtectedRoute component={CleaningAttendance} />} />
       <Route path="/admin" component={() => <ProtectedRoute component={Admin} adminOnly />} />
       <Route path="/profile" component={() => <ProtectedRoute component={Profile} />} />

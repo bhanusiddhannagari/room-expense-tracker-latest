@@ -61,21 +61,53 @@ function createUndoId(chatId: number, payerUserId: string): string {
   return `${timePart}${randomPart}`;
 }
 
-function findUserByTelegramName(users: BotUser[], telegramFirstName: string, telegramUsername?: string): BotUser | undefined {
-  const firstName = telegramFirstName.toLowerCase();
+function findUserByTelegramName(
+  users: BotUser[],
+  telegramFirstName: string,
+  telegramUsername?: string,
+  telegramLastName?: string
+): BotUser | undefined {
+  const firstName = (telegramFirstName || "").toLowerCase().trim();
+  const lastName = (telegramLastName || "").toLowerCase().trim();
+  const fullName = `${firstName} ${lastName}`.trim();
+  const username = (telegramUsername || "").toLowerCase().trim();
 
-  let user = users.find((u) => u.name.toLowerCase() === firstName);
-  if (user) return user;
-
-  user = users.find((u) => u.name.toLowerCase().startsWith(firstName));
-  if (user) return user;
-
-  if (telegramUsername) {
-    const username = telegramUsername.toLowerCase();
-    user = users.find((u) => u.username?.toLowerCase() === username || u.name.toLowerCase() === username);
+  // 1. Match by Telegram @username against db username or db name
+  if (username) {
+    const userByUsername = users.find((u) => {
+      const uUsername = (u.username || "").toLowerCase();
+      const uName = (u.name || "").toLowerCase();
+      return uUsername === username || uName === username;
+    });
+    if (userByUsername) return userByUsername;
   }
 
-  return user;
+  // 2. Exact match against full name or first name
+  let user = users.find((u) => {
+    const uName = u.name.toLowerCase();
+    return uName === firstName || (fullName && uName === fullName);
+  });
+  if (user) return user;
+
+  // 3. Starts with in either direction
+  user = users.find((u) => {
+    const uName = u.name.toLowerCase();
+    return (
+      (firstName && (uName.startsWith(firstName) || firstName.startsWith(uName))) ||
+      (fullName && (uName.startsWith(fullName) || fullName.startsWith(uName)))
+    );
+  });
+  if (user) return user;
+
+  // 4. Word/token matching (e.g. "Muralidhar Reddy" matches "Muralidhar")
+  user = users.find((u) => {
+    const uName = u.name.toLowerCase();
+    const tokens = `${firstName} ${lastName}`.split(/\s+/).filter(Boolean);
+    return tokens.some((t) => t === uName || uName.startsWith(t) || t.startsWith(uName));
+  });
+  if (user) return user;
+
+  return undefined;
 }
 
 function getMonthFromDate(date: string): string {
@@ -226,7 +258,7 @@ async function safeAnswerCallbackQuery(
 async function resolveRequester(msg: TelegramBot.Message): Promise<BotUser | null> {
   try {
     const users = await storage.getUsers();
-    const requester = findUserByTelegramName(users as BotUser[], msg.from?.first_name || "", msg.from?.username);
+    const requester = findUserByTelegramName(users as BotUser[], msg.from?.first_name || "", msg.from?.username, msg.from?.last_name);
     return requester || null;
   } catch (error) {
     console.error("Failed to resolve requester:", error);
@@ -234,10 +266,10 @@ async function resolveRequester(msg: TelegramBot.Message): Promise<BotUser | nul
   }
 }
 
-async function resolveRequesterFromTelegramIdentity(firstName: string, username?: string): Promise<BotUser | null> {
+async function resolveRequesterFromTelegramIdentity(firstName: string, username?: string, lastName?: string): Promise<BotUser | null> {
   try {
     const users = await storage.getUsers();
-    const requester = findUserByTelegramName(users as BotUser[], firstName || "", username);
+    const requester = findUserByTelegramName(users as BotUser[], firstName || "", username, lastName);
     return requester || null;
   } catch (error) {
     console.error("Failed to resolve requester from callback:", error);
@@ -411,8 +443,17 @@ async function handleNaturalMessage(bot: TelegramBot, msg: TelegramBot.Message):
     if (text.startsWith("/")) return;
 
     const { users, categories, monthStatus } = await storage.getAppState();
-    const payer = findUserByTelegramName(users, msg.from?.first_name || "", msg.from?.username);
-    if (!payer) return;
+    const payer = findUserByTelegramName(users, msg.from?.first_name || "", msg.from?.username, msg.from?.last_name);
+    if (!payer) {
+      const nameDisplay = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || msg.from?.username || "Unknown";
+      console.log(`Telegram user not matched: ${nameDisplay}`);
+      await safeSendMessage(
+        bot,
+        msg.chat.id,
+        `❌ User "${nameDisplay}" is not recognized in the system.\n\nPlease ask Admin to add your name in RoomExpense.`
+      );
+      return;
+    }
 
     const drafts = parseExpenseMessage({
       text,
@@ -429,6 +470,11 @@ async function handleNaturalMessage(bot: TelegramBot, msg: TelegramBot.Message):
       return;
     }
 
+    // Identify the active unlocked month
+    const activeMonthObj = (monthStatus || [])
+      .filter((m: any) => !m.isLocked)
+      .sort((a: any, b: any) => b.month.localeCompare(a.month))[0];
+
     const savedEntries: Array<{
       draft: ParsedExpenseDraft;
       splitUsers: string[];
@@ -438,16 +484,40 @@ async function handleNaturalMessage(bot: TelegramBot, msg: TelegramBot.Message):
     }> = [];
 
     for (const draft of drafts) {
-      const month = getMonthFromDate(draft.date);
-      const monthLocked = monthStatus.find((m: { month: string; isLocked: boolean }) => m.month === month)?.isLocked;
-      if (monthLocked) {
-        continue;
+      let expenseMonth = getMonthFromDate(draft.date);
+      let expenseDate = draft.date;
+
+      const targetMonthStatus = (monthStatus || []).find((m: any) => m.month === expenseMonth);
+
+      if (!targetMonthStatus) {
+        // Month has not been created by Admin
+        if (activeMonthObj) {
+          expenseMonth = activeMonthObj.month;
+          // Use last date of active month (Enhancement 1)
+          const [yStr, mStr] = expenseMonth.split("-");
+          const lastDay = new Date(Number(yStr), Number(mStr), 0).getDate();
+          expenseDate = `${expenseMonth}-${String(lastDay).padStart(2, "0")}`;
+        } else {
+          await safeSendMessage(
+            bot,
+            msg.chat.id,
+            `⚠️ Month ${expenseMonth} has not been created by Admin, and no active months are available.`
+          );
+          return;
+        }
+      } else if (targetMonthStatus.isLocked) {
+        await safeSendMessage(
+          bot,
+          msg.chat.id,
+          `⚠️ Month ${expenseMonth} is locked. Cannot add expenses to a locked month.`
+        );
+        return;
       }
 
       const participants =
         draft.userSelectionMode === "mentioned"
           ? draft.participants
-          : await getActiveUsersForMonth(month, users as BotUser[]);
+          : await getActiveUsersForMonth(expenseMonth, users as BotUser[]);
 
       if (participants.length === 0) {
         continue;
@@ -480,8 +550,8 @@ async function handleNaturalMessage(bot: TelegramBot, msg: TelegramBot.Message):
       }
 
       const created = await storage.createExpense({
-        date: draft.date,
-        month,
+        date: expenseDate,
+        month: expenseMonth,
         description: `${draft.type} (via Telegram)`,
         amount: effectiveAmount,
         categoryId: category.id,
@@ -492,7 +562,7 @@ async function handleNaturalMessage(bot: TelegramBot, msg: TelegramBot.Message):
       });
 
       savedEntries.push({
-        draft: { ...draft, amount: effectiveAmount },
+        draft: { ...draft, date: expenseDate, amount: effectiveAmount },
         splitUsers,
         splits: splitDetails,
         expenseId: created.id,
@@ -642,6 +712,14 @@ export async function startTelegramBot(): Promise<void> {
   const requestOptions = process.env.NODE_ENV !== "production"
     ? { agentOptions: { rejectUnauthorized: false } }
     : undefined;
+  if (!useWebhook) {
+    try {
+      await fetch(`https://api.telegram.org/bot${token}/deleteWebhook`);
+    } catch {
+      // ignore transient network check
+    }
+  }
+
   botInstance = new TelegramBot(token, { polling: !useWebhook, request: requestOptions as any });
 
   if (useWebhook && process.env.TELEGRAM_WEBHOOK_URL) {

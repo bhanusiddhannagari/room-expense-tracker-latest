@@ -23,12 +23,11 @@ export default function SettlementsPage() {
   const {
     expenses, users, currentUser, settlements,
     addSettlement, updateSettlement,
-    isMonthLocked, availableMonths, refreshState,
+    isMonthLocked, availableMonths, activeMonth, refreshState,
   } = useApp();
 
   // ── Month Selector ──────────────────────────────────────────────────────────
-  // For testing: default to 2026-01
-  const [selectedMonth, setSelectedMonth] = useState<string>('2026-01');
+  const [selectedMonth, setSelectedMonth] = useState<string>('');
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const handleRefresh = async () => {
@@ -41,17 +40,12 @@ export default function SettlementsPage() {
     }
   };
 
-  // Default to 2026-01 for testing, then most recent unlocked month
+  // Default to active month (most recent unlocked month), or newest available month
   useEffect(() => {
-    if (availableMonths.length > 0 && !availableMonths.includes(selectedMonth)) {
-      if (availableMonths.includes('2026-01')) {
-        setSelectedMonth('2026-01');
-      } else {
-        const firstUnlocked = availableMonths.find(m => !isMonthLocked(m));
-        setSelectedMonth(firstUnlocked ?? availableMonths[0]);
-      }
+    if (availableMonths.length > 0 && (!selectedMonth || !availableMonths.includes(selectedMonth))) {
+      setSelectedMonth(activeMonth || availableMonths[0]);
     }
-  }, [availableMonths]);
+  }, [availableMonths, activeMonth, selectedMonth]);
 
   const isLocked = selectedMonth ? isMonthLocked(selectedMonth) : false;
 

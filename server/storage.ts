@@ -1,6 +1,6 @@
-import { users, categories, monthStatus, settlements, expenses, activeUsersByMonth, cleaningAttendance, type User, type InsertUser, type CleaningAttendanceRecord } from "@shared/schema";
+import { users, categories, monthStatus, settlements, expenses, activeUsersByMonth, cleaningAttendance, schedules, scheduleCategories, type User, type InsertUser, type CleaningAttendanceRecord, type ScheduleRecord, type ScheduleCategoryRecord } from "@shared/schema";
 import { db } from "./db";
-import { and, eq, or } from "drizzle-orm";
+import { and, eq, or, sql } from "drizzle-orm";
 
 export interface IStorage {
   // Users
@@ -40,6 +40,18 @@ export interface IStorage {
   updateCleaningAttendanceStatus(id: string, status: string, approvedBy?: string): Promise<any>;
   getCleaningAttendanceByMonth(month: string): Promise<any[]>;
   getCleaningAttendance(id: string): Promise<any | undefined>;
+
+  // Schedules
+  getSchedules(month?: string): Promise<any[]>;
+  getSchedule(id: string): Promise<any | undefined>;
+  createSchedule(schedule: any): Promise<any>;
+  updateSchedule(id: string, schedule: any): Promise<any>;
+  deleteSchedule(id: string): Promise<void>;
+
+  // Schedule Categories
+  getScheduleCategories(): Promise<any[]>;
+  createScheduleCategory(category: any): Promise<any>;
+  deleteScheduleCategory(id: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -84,11 +96,29 @@ export class DatabaseStorage implements IStorage {
     try {
       allCleaningAttendance = await db.select().from(cleaningAttendance);
     } catch (err) {
-      // Table might not exist yet - log and continue
       const errorMsg = err instanceof Error ? err.message : String(err);
       if (!errorMsg.includes('does not exist')) {
-        // Only log if it's not a "table doesn't exist" error
         console.warn("Warning: Could not fetch cleaning attendance:", errorMsg);
+      }
+    }
+
+    // Try to fetch schedules and schedule categories
+    let allSchedules: any[] = [];
+    let allScheduleCategories: any[] = [];
+    try {
+      allSchedules = await db.select().from(schedules);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      if (!errorMsg.includes('does not exist')) {
+        console.warn("Warning: Could not fetch schedules:", errorMsg);
+      }
+    }
+    try {
+      allScheduleCategories = await db.select().from(scheduleCategories);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      if (!errorMsg.includes('does not exist')) {
+        console.warn("Warning: Could not fetch schedule categories:", errorMsg);
       }
     }
 
@@ -98,12 +128,27 @@ export class DatabaseStorage implements IStorage {
       expenses: allExpenses,
       monthStatus: allMonthStatus,
       settlements: allSettlements,
-      cleaningAttendance: allCleaningAttendance
+      cleaningAttendance: allCleaningAttendance,
+      schedules: allSchedules,
+      scheduleCategories: allScheduleCategories,
     };
   }
 
   async createExpense(expense: any): Promise<any> {
-    const [created] = await db.insert(expenses).values(expense).returning();
+    let serialNo = expense.serialNo;
+    if (serialNo === undefined || serialNo === null) {
+      try {
+        const [maxRow] = await db
+          .select({ maxSerial: sql<number>`COALESCE(MAX(${expenses.serialNo}), 0)` })
+          .from(expenses)
+          .where(eq(expenses.month, expense.month));
+        serialNo = Number(maxRow?.maxSerial || 0) + 1;
+      } catch (err) {
+        console.warn("Could not calculate max serial_no, defaulting to 1:", err);
+        serialNo = 1;
+      }
+    }
+    const [created] = await db.insert(expenses).values({ ...expense, serialNo }).returning();
     return created;
   }
 
@@ -235,6 +280,47 @@ export class DatabaseStorage implements IStorage {
   async getCleaningAttendance(id: string): Promise<any | undefined> {
     const [record] = await db.select().from(cleaningAttendance).where(eq(cleaningAttendance.id, id));
     return record;
+  }
+
+  // Schedule Methods
+  async getSchedules(month?: string): Promise<any[]> {
+    if (month) {
+      return await db.select().from(schedules).where(eq(schedules.month, month));
+    }
+    return await db.select().from(schedules);
+  }
+
+  async getSchedule(id: string): Promise<any | undefined> {
+    const [record] = await db.select().from(schedules).where(eq(schedules.id, id));
+    return record;
+  }
+
+  async createSchedule(schedule: any): Promise<any> {
+    const [created] = await db.insert(schedules).values(schedule).returning();
+    return created;
+  }
+
+  async updateSchedule(id: string, schedule: any): Promise<any> {
+    const [updated] = await db.update(schedules).set(schedule).where(eq(schedules.id, id)).returning();
+    return updated;
+  }
+
+  async deleteSchedule(id: string): Promise<void> {
+    await db.delete(schedules).where(eq(schedules.id, id));
+  }
+
+  // Schedule Category Methods
+  async getScheduleCategories(): Promise<any[]> {
+    return await db.select().from(scheduleCategories);
+  }
+
+  async createScheduleCategory(category: any): Promise<any> {
+    const [created] = await db.insert(scheduleCategories).values(category).returning();
+    return created;
+  }
+
+  async deleteScheduleCategory(id: string): Promise<void> {
+    await db.delete(scheduleCategories).where(eq(scheduleCategories.id, id));
   }
 }
 

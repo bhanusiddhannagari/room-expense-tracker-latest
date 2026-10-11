@@ -31,6 +31,27 @@ export function registerRoutes(
           }
         }
       }
+
+      // Seed default schedule categories if empty
+      try {
+        const schedCats = await storage.getScheduleCategories();
+        if (schedCats.length === 0) {
+          const DEFAULT_SCHEDULE_CATEGORIES = [
+            "Room Cleaning",
+            "Vessel Cleaning",
+            "Grocery",
+            "Bill Payment",
+            "Maintenance",
+            "Other",
+          ];
+          for (const catName of DEFAULT_SCHEDULE_CATEGORIES) {
+            await storage.createScheduleCategory({ name: catName, isDefault: true });
+          }
+          console.log("Default schedule categories created.");
+        }
+      } catch (catErr) {
+        console.warn("Schedule categories table may not exist yet:", catErr);
+      }
     } catch (error) {
       console.error("Failed to seed default Admin user:", error);
     }
@@ -261,6 +282,136 @@ export function registerRoutes(
       const updated = await storage.updateCleaningAttendanceStatus(req.params.id, status, approvedBy);
       res.json(updated);
     } catch (e) { res.status(500).json({ error: "Failed to update attendance" }); }
+  });
+
+  // Schedules
+  app.get("/api/schedules", async (req: Request, res: Response) => {
+    try {
+      const month = req.query.month ? String(req.query.month) : undefined;
+      const list = await storage.getSchedules(month);
+      res.json(list);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to fetch schedules" });
+    }
+  });
+
+  app.get("/api/schedules/:id", async (req: Request, res: Response) => {
+    try {
+      const item = await storage.getSchedule(String(req.params.id));
+      if (!item) return res.status(404).json({ error: "Schedule not found" });
+      res.json(item);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to fetch schedule" });
+    }
+  });
+
+  app.post("/api/schedules", async (req: Request, res: Response) => {
+    try {
+      const created = await storage.createSchedule({
+        ...req.body,
+        createdAt: new Date().toISOString(),
+      });
+      res.json(created);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to create schedule" });
+    }
+  });
+
+  app.put("/api/schedules/:id", async (req: Request, res: Response) => {
+    try {
+      const updated = await storage.updateSchedule(String(req.params.id), req.body);
+      res.json(updated);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to update schedule" });
+    }
+  });
+
+  app.delete("/api/schedules/:id", async (req: Request, res: Response) => {
+    try {
+      await storage.deleteSchedule(String(req.params.id));
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to delete schedule" });
+    }
+  });
+
+  // Schedule Categories
+  app.get("/api/schedule-categories", async (_req: Request, res: Response) => {
+    try {
+      const list = await storage.getScheduleCategories();
+      res.json(list);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to fetch schedule categories" });
+    }
+  });
+
+  app.post("/api/schedule-categories", async (req: Request, res: Response) => {
+    try {
+      const created = await storage.createScheduleCategory(req.body);
+      res.json(created);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to create schedule category" });
+    }
+  });
+
+  app.delete("/api/schedule-categories/:id", async (req: Request, res: Response) => {
+    try {
+      await storage.deleteScheduleCategory(String(req.params.id));
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message || "Failed to delete schedule category" });
+    }
+  });
+
+  // Telegram status and webhook management
+  app.get("/api/telegram/status", async (_req: Request, res: Response) => {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) {
+      return res.json({ configured: false, error: "TELEGRAM_BOT_TOKEN not configured" });
+    }
+    try {
+      const [meRes, webhookRes] = await Promise.all([
+        fetch(`https://api.telegram.org/bot${token}/getMe`).then((r) => r.json()),
+        fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`).then((r) => r.json()),
+      ]);
+      res.json({
+        configured: true,
+        bot: meRes.result,
+        webhook: webhookRes.result,
+        useWebhook: process.env.TELEGRAM_USE_WEBHOOK === "true" || Boolean(process.env.VERCEL),
+        envWebhookUrl: process.env.TELEGRAM_WEBHOOK_URL || null,
+      });
+    } catch (err: any) {
+      res.status(500).json({ configured: true, error: err.message });
+    }
+  });
+
+  app.post("/api/telegram/setup-webhook", async (req: Request, res: Response) => {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) return res.status(400).json({ error: "TELEGRAM_BOT_TOKEN not set" });
+    const targetUrl = req.body?.webhookUrl || process.env.TELEGRAM_WEBHOOK_URL;
+    if (!targetUrl) {
+      return res.status(400).json({ error: "Missing webhookUrl in body or TELEGRAM_WEBHOOK_URL in environment" });
+    }
+    const cleanUrl = String(targetUrl).replace(/\/+$/, "");
+    const webhookEndpoint = `${cleanUrl}/api/telegram/webhook`;
+    try {
+      const tgRes = await fetch(`https://api.telegram.org/bot${token}/setWebhook?url=${encodeURIComponent(webhookEndpoint)}`).then((r) => r.json());
+      res.json({ success: tgRes.ok, result: tgRes, webhookEndpoint });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/telegram/delete-webhook", async (_req: Request, res: Response) => {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) return res.status(400).json({ error: "TELEGRAM_BOT_TOKEN not set" });
+    try {
+      const tgRes = await fetch(`https://api.telegram.org/bot${token}/deleteWebhook`).then((r) => r.json());
+      res.json({ success: tgRes.ok, result: tgRes });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   return httpServer;

@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
-import { User, Expense, Category, MonthStatus, Settlement, Role, CleaningAttendance } from '../lib/types';
+import { User, Expense, Category, MonthStatus, Settlement, Role, CleaningAttendance, Schedule, ScheduleCategory } from '../lib/types';
 import { useToast } from './use-toast';
+import { format, parseISO, endOfMonth } from 'date-fns';
 
 interface AppState {
   currentUser: User | null;
@@ -10,6 +11,8 @@ interface AppState {
   monthStatus: MonthStatus[];
   settlements: Settlement[];
   cleaningAttendance: CleaningAttendance[];
+  schedules: Schedule[];
+  scheduleCategories: ScheduleCategory[];
   isLoading: boolean;
 
   login: (username: string, password?: string) => void;
@@ -33,11 +36,21 @@ interface AppState {
   createCleaningAttendance: (attendance: Omit<CleaningAttendance, 'id' | 'createdAt'>) => Promise<void>;
   updateCleaningAttendanceStatus: (id: string, status: string, approvedBy?: string) => Promise<void>;
   getCleaningAttendanceByMonth: (month: string) => CleaningAttendance[];
+  
+  // Schedules
+  addSchedule: (schedule: Omit<Schedule, 'id' | 'createdAt'>) => Promise<void>;
+  updateSchedule: (schedule: Schedule) => Promise<void>;
+  deleteSchedule: (id: string) => Promise<void>;
+  addScheduleCategory: (name: string) => Promise<void>;
+  deleteScheduleCategory: (categoryId: string) => Promise<void>;
+  getSchedulesByMonth: (month: string) => Schedule[];
+
   refreshState: () => Promise<void>;
 
   // Helpers
   getExpensesByMonth: (month: string) => Expense[];
   isMonthLocked: (month: string) => boolean;
+  getDefaultExpenseDate: () => Date;
   /** All admin-created months, sorted newest first */
   availableMonths: string[];
   /** Most recent unlocked month, or null if all locked / none exists */
@@ -60,6 +73,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [monthStatus, setMonthStatus] = useState<MonthStatus[]>([]);
   const [settlements, setSettlements] = useState<Settlement[]>([]);
   const [cleaningAttendance, setCleaningAttendance] = useState<CleaningAttendance[]>([]);
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [scheduleCategories, setScheduleCategories] = useState<ScheduleCategory[]>([]);
   const [activeUsersByMonth, setActiveUsersByMonthState] = useState<Record<string, string[]>>({});
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
@@ -76,6 +91,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setMonthStatus(data.monthStatus || []);
       setSettlements(data.settlements || []);
       setCleaningAttendance(data.cleaningAttendance || []);
+      setSchedules(data.schedules || []);
+      setScheduleCategories(data.scheduleCategories || []);
     } catch (err) {
       console.error('Failed to fetch state:', err);
     } finally {
@@ -123,6 +140,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const isMonthLocked = (month: string) =>
     monthStatus.find(m => m.month === month)?.isLocked ?? false;
+
+  /**
+   * Enhancement 1: If current calendar month is beyond activeMonth,
+   * select the last date of currently active month (e.g. March 31, 2026).
+   * Once Admin activates new month, automatically uses today's date within that active month.
+   */
+  const getDefaultExpenseDate = useCallback((): Date => {
+    const today = new Date();
+    if (!activeMonth) {
+      if (availableMonths.length > 0) {
+        return endOfMonth(parseISO(`${availableMonths[0]}-01`));
+      }
+      return today;
+    }
+    const currentCalendarMonth = format(today, 'yyyy-MM');
+    if (currentCalendarMonth <= activeMonth) {
+      return today;
+    }
+    return endOfMonth(parseISO(`${activeMonth}-01`));
+  }, [activeMonth, availableMonths]);
 
   // ── Auth ────────────────────────────────────────────────────────────────────
   const login = (username: string, password?: string) => {
@@ -484,6 +521,81 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const getCleaningAttendanceByMonth = (month: string) => 
     cleaningAttendance.filter(a => a.month === month);
 
+  // ── Schedules ───────────────────────────────────────────────────────────────
+  const addSchedule = async (schedule: Omit<Schedule, 'id' | 'createdAt'>) => {
+    const res = await fetch('/api/schedules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(schedule),
+    });
+    if (res.ok) {
+      await fetchState();
+      toast({ title: 'Schedule created successfully' });
+    } else {
+      const err = await res.json().catch(() => ({}));
+      toast({ title: 'Failed to create schedule', description: err.error || '', variant: 'destructive' });
+    }
+  };
+
+  const updateSchedule = async (schedule: Schedule) => {
+    const res = await fetch(`/api/schedules/${schedule.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...schedule, requestingUserId: currentUser?.id, requestingUserName: currentUser?.name }),
+    });
+    if (res.ok) {
+      await fetchState();
+      toast({ title: 'Schedule updated successfully' });
+    } else {
+      const err = await res.json().catch(() => ({}));
+      toast({ title: 'Failed to update schedule', description: err.error || '', variant: 'destructive' });
+    }
+  };
+
+  const deleteSchedule = async (id: string) => {
+    const res = await fetch(`/api/schedules/${id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestingUserId: currentUser?.id, requestingUserName: currentUser?.name }),
+    });
+    if (res.ok) {
+      await fetchState();
+      toast({ title: 'Schedule deleted' });
+    } else {
+      const err = await res.json().catch(() => ({}));
+      toast({ title: 'Failed to delete schedule', description: err.error || '', variant: 'destructive' });
+    }
+  };
+
+  const addScheduleCategory = async (name: string) => {
+    const res = await fetch('/api/schedule-categories', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (res.ok) {
+      await fetchState();
+      toast({ title: 'Category added' });
+    } else {
+      const err = await res.json().catch(() => ({}));
+      toast({ title: 'Failed to add category', description: err.error || '', variant: 'destructive' });
+    }
+  };
+
+  const deleteScheduleCategory = async (categoryId: string) => {
+    const res = await fetch(`/api/schedule-categories/${categoryId}`, { method: 'DELETE' });
+    if (res.ok) {
+      await fetchState();
+      toast({ title: 'Category removed' });
+    } else {
+      const err = await res.json().catch(() => ({}));
+      toast({ title: 'Failed to remove category', description: err.error || '', variant: 'destructive' });
+    }
+  };
+
+  const getSchedulesByMonth = (month: string) =>
+    schedules.filter(s => s.month === month);
+
   return (
     <AppContext.Provider value={{
       currentUser,
@@ -493,6 +605,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       monthStatus,
       settlements,
       cleaningAttendance,
+      schedules,
+      scheduleCategories,
       isLoading,
       login,
       logout,
@@ -515,9 +629,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       createCleaningAttendance,
       updateCleaningAttendanceStatus,
       getCleaningAttendanceByMonth,
+      addSchedule,
+      updateSchedule,
+      deleteSchedule,
+      addScheduleCategory,
+      deleteScheduleCategory,
+      getSchedulesByMonth,
       refreshState,
       getExpensesByMonth,
       isMonthLocked,
+      getDefaultExpenseDate,
       availableMonths,
       activeMonth,
     }}>

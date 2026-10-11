@@ -76,6 +76,25 @@ export const cleaningAttendance = pgTable("cleaning_attendance", {
   createdAt: text("created_at").notNull(),
 });
 
+export const scheduleCategories = pgTable("schedule_categories", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull().unique(),
+  isDefault: boolean("is_default").default(false),
+});
+
+export const schedules = pgTable("schedules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  title: text("title").notNull(),
+  date: text("date").notNull(),
+  month: text("month").notNull(), // YYYY-MM
+  startTime: text("start_time").notNull(),
+  endTime: text("end_time"),
+  type: text("type").notNull(),
+  description: text("description"),
+  createdBy: text("created_by").notNull(), // userId
+  createdAt: text("created_at").notNull(),
+});
+
 export const insertUserSchema = createInsertSchema(users).pick({
   username: true,
   password: true,
@@ -87,4 +106,6 @@ export const insertUserSchema = createInsertSchema(users).pick({
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 export type CleaningAttendanceRecord = typeof cleaningAttendance.$inferSelect;
+export type ScheduleRecord = typeof schedules.$inferSelect;
+export type ScheduleCategoryRecord = typeof scheduleCategories.$inferSelect;
 

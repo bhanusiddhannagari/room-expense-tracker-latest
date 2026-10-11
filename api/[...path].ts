@@ -565,17 +565,49 @@ interface BotCategory {
   name: string;
 }
 
-function findUserByTelegramName(users: BotUser[], telegramFirstName: string, telegramUsername?: string): BotUser | undefined {
-  const firstName = telegramFirstName.toLowerCase();
-  let user = users.find((u) => u.name.toLowerCase() === firstName);
-  if (user) return user;
-  user = users.find((u) => u.name.toLowerCase().startsWith(firstName));
-  if (user) return user;
-  if (telegramUsername) {
-    const username = telegramUsername.toLowerCase();
-    user = users.find((u) => u.username?.toLowerCase() === username || u.name.toLowerCase() === username);
+function findUserByTelegramName(
+  users: BotUser[],
+  telegramFirstName: string,
+  telegramUsername?: string,
+  telegramLastName?: string
+): BotUser | undefined {
+  const firstName = (telegramFirstName || "").toLowerCase().trim();
+  const lastName = (telegramLastName || "").toLowerCase().trim();
+  const fullName = `${firstName} ${lastName}`.trim();
+  const username = (telegramUsername || "").toLowerCase().trim();
+
+  if (username) {
+    const userByUsername = users.find((u) => {
+      const uUsername = (u.username || "").toLowerCase();
+      const uName = (u.name || "").toLowerCase();
+      return uUsername === username || uName === username;
+    });
+    if (userByUsername) return userByUsername;
   }
-  return user;
+
+  let user = users.find((u) => {
+    const uName = u.name.toLowerCase();
+    return uName === firstName || (fullName && uName === fullName);
+  });
+  if (user) return user;
+
+  user = users.find((u) => {
+    const uName = u.name.toLowerCase();
+    return (
+      (firstName && (uName.startsWith(firstName) || firstName.startsWith(uName))) ||
+      (fullName && (uName.startsWith(fullName) || fullName.startsWith(uName)))
+    );
+  });
+  if (user) return user;
+
+  user = users.find((u) => {
+    const uName = u.name.toLowerCase();
+    const tokens = `${firstName} ${lastName}`.split(/\s+/).filter(Boolean);
+    return tokens.some((t) => t === uName || uName.startsWith(t) || t.startsWith(uName));
+  });
+  if (user) return user;
+
+  return undefined;
 }
 
 function buildEqualSplits(participants: Array<{ id: string }>, amount: number): { userId: string; amount: number }[] {
@@ -819,10 +851,11 @@ async function handleTelegramUpdate(update: any): Promise<void> {
       sql`SELECT *, is_locked AS "isLocked" FROM month_status ORDER BY month DESC`,
     ]);
 
-    const payer = findUserByTelegramName(users as BotUser[], msg.from?.first_name || "", msg.from?.username);
+    const payer = findUserByTelegramName(users as BotUser[], msg.from?.first_name || "", msg.from?.username, msg.from?.last_name);
     if (!payer) {
-      console.log(`Telegram user not found: ${msg.from?.first_name} / @${msg.from?.username}`);
-      await sendTelegramMessage(token, chatId, `❌ User "${msg.from?.first_name || msg.from?.username}" not found in the system.\n\nPlease ask your admin to add you with a matching name.`);
+      const nameDisplay = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ") || msg.from?.username || "Unknown";
+      console.log(`Telegram user not found: ${nameDisplay}`);
+      await sendTelegramMessage(token, chatId, `❌ User "${nameDisplay}" not found in the system.\n\nPlease ask your admin to add you with a matching name.`);
       return;
     }
 
@@ -841,6 +874,11 @@ async function handleTelegramUpdate(update: any): Promise<void> {
       return;
     }
 
+    // Find active unlocked month
+    const activeMonthObj = (monthStatus as any[])
+      .filter((m) => !m.isLocked)
+      .sort((a, b) => b.month.localeCompare(a.month))[0];
+
     const savedEntries: Array<{
       expenseId: string;
       draft: ParsedExpenseDraft;
@@ -849,9 +887,33 @@ async function handleTelegramUpdate(update: any): Promise<void> {
     }> = [];
 
     for (const draft of drafts) {
-      const month = draft.date.slice(0, 7);
-      const monthLocked = (monthStatus as any[]).find((m) => m.month === month)?.isLocked;
-      if (monthLocked) continue;
+      let expenseMonth = draft.date.slice(0, 7);
+      let expenseDate = draft.date;
+
+      const targetMonthStatus = (monthStatus as any[]).find((m) => m.month === expenseMonth);
+
+      if (!targetMonthStatus) {
+        if (activeMonthObj) {
+          expenseMonth = activeMonthObj.month;
+          const [yStr, mStr] = expenseMonth.split("-");
+          const lastDay = new Date(Number(yStr), Number(mStr), 0).getDate();
+          expenseDate = `${expenseMonth}-${String(lastDay).padStart(2, "0")}`;
+        } else {
+          await sendTelegramMessage(
+            token,
+            chatId,
+            `⚠️ Month ${expenseMonth} has not been created by Admin, and no active months are available.`
+          );
+          return;
+        }
+      } else if (targetMonthStatus.isLocked) {
+        await sendTelegramMessage(
+          token,
+          chatId,
+          `⚠️ Month ${expenseMonth} is locked. Cannot add expenses to a locked month.`
+        );
+        return;
+      }
 
       // For default-all mode, fetch active users for the month
       let participants: BotUser[];
@@ -861,7 +923,7 @@ async function handleTelegramUpdate(update: any): Promise<void> {
         // Get active users for the month
         const activeLinks = await sql`
           SELECT user_id FROM active_users_by_month
-          WHERE month = ${month} AND is_active = TRUE
+          WHERE month = ${expenseMonth} AND is_active = TRUE
         `;
         if (activeLinks.length > 0) {
           const activeIds = new Set(activeLinks.map((l: any) => l.user_id));
@@ -896,20 +958,20 @@ async function handleTelegramUpdate(update: any): Promise<void> {
 
       // Calculate next serial number
       const [serialRow] = await sql`
-        SELECT COALESCE(MAX(serial_no), 0) + 1 AS next_serial FROM expenses WHERE month = ${month}
+        SELECT COALESCE(MAX(serial_no), 0) + 1 AS next_serial FROM expenses WHERE month = ${expenseMonth}
       `;
       const nextSerial = Number(serialRow.next_serial);
 
       // Insert expense and get its ID
       const [inserted] = await sql`
         INSERT INTO expenses (date, month, description, amount, category_id, paid_by, split_type, splits, created_at, serial_no)
-        VALUES (${draft.date}, ${month}, ${draft.type + " (via Telegram)"}, ${effectiveAmount}, ${category.id}, ${payer.id}, ${draft.splits.length > 0 ? "custom" : "equal"}, ${JSON.stringify(splits)}, ${new Date().toISOString()}, ${nextSerial})
+        VALUES (${expenseDate}, ${expenseMonth}, ${draft.type + " (via Telegram)"}, ${effectiveAmount}, ${category.id}, ${payer.id}, ${draft.splits.length > 0 ? "custom" : "equal"}, ${JSON.stringify(splits)}, ${new Date().toISOString()}, ${nextSerial})
         RETURNING id
       `;
 
       savedEntries.push({
         expenseId: inserted.id,
-        draft: { ...draft, amount: effectiveAmount },
+        draft: { ...draft, date: expenseDate, amount: effectiveAmount },
         splitUsers,
         splits: splitDetails,
       });
@@ -1100,6 +1162,46 @@ async function seedDefaults() {
       ON CONFLICT (LOWER(name)) DO NOTHING
     `;
   }
+
+  // ── Schedules and Schedule Categories ───────────────────────────────────────
+  await sql`
+    CREATE TABLE IF NOT EXISTS schedule_categories (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL UNIQUE,
+      is_default BOOLEAN DEFAULT FALSE
+    )
+  `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS schedules (
+      id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+      title TEXT NOT NULL,
+      date TEXT NOT NULL,
+      month TEXT NOT NULL,
+      start_time TEXT NOT NULL,
+      end_time TEXT,
+      type TEXT NOT NULL,
+      description TEXT,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+  `;
+
+  const defaultSchedCats = [
+    "Room Cleaning",
+    "Vessel Cleaning",
+    "Grocery",
+    "Bill Payment",
+    "Maintenance",
+    "Other",
+  ];
+  for (const name of defaultSchedCats) {
+    await sql`
+      INSERT INTO schedule_categories (name, is_default)
+      VALUES (${name}, TRUE)
+      ON CONFLICT (name) DO NOTHING
+    `;
+  }
 }
 
 // ─── Express App ──────────────────────────────────────────────────────────────
@@ -1201,7 +1303,7 @@ app.get("/api/state", async (_req: Request, res: Response) => {
   try {
     const sql = getSql();
     await seedDefaults();
-    const [users, categories, expenses, monthStatus, settlements, cleaningAttendance] = await Promise.all([
+    const [users, categories, expenses, monthStatus, settlements, cleaningAttendance, schedules, scheduleCategories] = await Promise.all([
       sql`SELECT * FROM users ORDER BY name`,
       sql`SELECT *, is_default AS "isDefault" FROM categories ORDER BY name`,
       sql`
@@ -1234,8 +1336,22 @@ app.get("/api/state", async (_req: Request, res: Response) => {
         FROM cleaning_attendance
         ORDER BY date DESC, created_at DESC
       `,
+      sql`
+        SELECT *,
+          start_time AS "startTime",
+          end_time   AS "endTime",
+          created_by AS "createdBy",
+          created_at AS "createdAt"
+        FROM schedules
+        ORDER BY date DESC, start_time ASC
+      `,
+      sql`
+        SELECT *, is_default AS "isDefault"
+        FROM schedule_categories
+        ORDER BY name ASC
+      `,
     ]);
-    res.json({ users, categories, expenses, monthStatus, settlements, cleaningAttendance });
+    res.json({ users, categories, expenses, monthStatus, settlements, cleaningAttendance, schedules, scheduleCategories });
   } catch (e: any) {
     console.error("GET /api/state error:", e);
     res.status(500).json({ error: e.message });
@@ -1630,6 +1746,211 @@ app.put("/api/cleaning-attendance/:id", async (req: Request, res: Response) => {
     res.json(item);
   } catch (e: any) {
     res.status(500).json({ error: e.message || "Failed to update attendance" });
+  }
+});
+
+// ─── Schedules ────────────────────────────────────────────────────────────────
+app.get("/api/schedules", async (req: Request, res: Response) => {
+  try {
+    const sql = getSql();
+    await seedDefaults();
+    const month = req.query.month ? String(req.query.month) : null;
+    const records = month
+      ? await sql`
+          SELECT *,
+            start_time AS "startTime",
+            end_time   AS "endTime",
+            created_by AS "createdBy",
+            created_at AS "createdAt"
+          FROM schedules
+          WHERE month = ${month}
+          ORDER BY date DESC, start_time ASC
+        `
+      : await sql`
+          SELECT *,
+            start_time AS "startTime",
+            end_time   AS "endTime",
+            created_by AS "createdBy",
+            created_at AS "createdAt"
+          FROM schedules
+          ORDER BY date DESC, start_time ASC
+        `;
+    res.json(records);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || "Failed to fetch schedules" });
+  }
+});
+
+app.get("/api/schedules/:id", async (req: Request, res: Response) => {
+  try {
+    const sql = getSql();
+    await seedDefaults();
+    const [item] = await sql`
+      SELECT *,
+        start_time AS "startTime",
+        end_time   AS "endTime",
+        created_by AS "createdBy",
+        created_at AS "createdAt"
+      FROM schedules
+      WHERE id = ${req.params.id}
+    `;
+    if (!item) return res.status(404).json({ error: "Schedule not found" });
+    res.json(item);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || "Failed to fetch schedule" });
+  }
+});
+
+app.post("/api/schedules", async (req: Request, res: Response) => {
+  try {
+    const sql = getSql();
+    await seedDefaults();
+    const { title, date, month, startTime, endTime, type, description, createdBy, createdAt } = req.body;
+    const [item] = await sql`
+      INSERT INTO schedules (title, date, month, start_time, end_time, type, description, created_by, created_at)
+      VALUES (${title}, ${date}, ${month}, ${startTime}, ${endTime || null}, ${type}, ${description || null}, ${createdBy}, ${createdAt || new Date().toISOString()})
+      RETURNING *,
+        start_time AS "startTime",
+        end_time   AS "endTime",
+        created_by AS "createdBy",
+        created_at AS "createdAt"
+    `;
+    res.json(item);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || "Failed to create schedule" });
+  }
+});
+
+app.put("/api/schedules/:id", async (req: Request, res: Response) => {
+  try {
+    const sql = getSql();
+    await seedDefaults();
+    const { title, date, month, startTime, endTime, type, description } = req.body;
+    const [item] = await sql`
+      UPDATE schedules
+      SET title = ${title},
+          date = ${date},
+          month = ${month},
+          start_time = ${startTime},
+          end_time = ${endTime || null},
+          type = ${type},
+          description = ${description || null}
+      WHERE id = ${req.params.id}
+      RETURNING *,
+        start_time AS "startTime",
+        end_time   AS "endTime",
+        created_by AS "createdBy",
+        created_at AS "createdAt"
+    `;
+    if (!item) return res.status(404).json({ error: "Schedule not found" });
+    res.json(item);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || "Failed to update schedule" });
+  }
+});
+
+app.delete("/api/schedules/:id", async (req: Request, res: Response) => {
+  try {
+    const sql = getSql();
+    await seedDefaults();
+    await sql`DELETE FROM schedules WHERE id = ${req.params.id}`;
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || "Failed to delete schedule" });
+  }
+});
+
+// ─── Schedule Categories ──────────────────────────────────────────────────────
+app.get("/api/schedule-categories", async (_req: Request, res: Response) => {
+  try {
+    const sql = getSql();
+    await seedDefaults();
+    const records = await sql`
+      SELECT *, is_default AS "isDefault"
+      FROM schedule_categories
+      ORDER BY name ASC
+    `;
+    res.json(records);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || "Failed to fetch schedule categories" });
+  }
+});
+
+app.post("/api/schedule-categories", async (req: Request, res: Response) => {
+  try {
+    const sql = getSql();
+    await seedDefaults();
+    const { name, isDefault } = req.body;
+    const [item] = await sql`
+      INSERT INTO schedule_categories (name, is_default)
+      VALUES (${name}, ${isDefault || false})
+      RETURNING *, is_default AS "isDefault"
+    `;
+    res.json(item);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || "Failed to create schedule category" });
+  }
+});
+
+app.delete("/api/schedule-categories/:id", async (req: Request, res: Response) => {
+  try {
+    const sql = getSql();
+    await seedDefaults();
+    await sql`DELETE FROM schedule_categories WHERE id = ${req.params.id}`;
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message || "Failed to delete schedule category" });
+  }
+});
+
+// ─── Telegram Webhook & Status Management ─────────────────────────────────────
+app.get("/api/telegram/status", async (_req: Request, res: Response) => {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) {
+    return res.json({ configured: false, error: "TELEGRAM_BOT_TOKEN not configured" });
+  }
+  try {
+    const [meRes, webhookRes] = await Promise.all([
+      fetch(`https://api.telegram.org/bot${token}/getMe`).then((r) => r.json()),
+      fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`).then((r) => r.json()),
+    ]);
+    res.json({
+      configured: true,
+      bot: meRes.result,
+      webhook: webhookRes.result,
+      useWebhook: true,
+      envWebhookUrl: process.env.TELEGRAM_WEBHOOK_URL || null,
+    });
+  } catch (err: any) {
+    res.status(500).json({ configured: true, error: err.message });
+  }
+});
+
+app.post("/api/telegram/setup-webhook", async (req: Request, res: Response) => {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return res.status(400).json({ error: "TELEGRAM_BOT_TOKEN not set" });
+  const targetUrl = req.body?.webhookUrl || process.env.TELEGRAM_WEBHOOK_URL;
+  if (!targetUrl) {
+    return res.status(400).json({ error: "Missing webhookUrl in body or TELEGRAM_WEBHOOK_URL in environment" });
+  }
+  const cleanUrl = String(targetUrl).replace(/\/+$/, "");
+  const webhookEndpoint = `${cleanUrl}/api/telegram/webhook`;
+  try {
+    const tgRes = await fetch(`https://api.telegram.org/bot${token}/setWebhook?url=${encodeURIComponent(webhookEndpoint)}`).then((r) => r.json());
+    res.json({ success: tgRes.ok, result: tgRes, webhookEndpoint });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/telegram/delete-webhook", async (_req: Request, res: Response) => {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return res.status(400).json({ error: "TELEGRAM_BOT_TOKEN not set" });
+  try {
+    const tgRes = await fetch(`https://api.telegram.org/bot${token}/deleteWebhook`).then((r) => r.json());
+    res.json({ success: tgRes.ok, result: tgRes });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 
