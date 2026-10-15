@@ -1,6 +1,8 @@
-import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
+import { registerRoutes } from "./routes";
+import { serveStatic } from "./static";
 import { createServer } from "http";
+import { startTelegramBot } from "./services/telegram-bot-service";
 import { config as loadEnv } from "dotenv";
 import path from "path";
 import { existsSync } from "fs";
@@ -8,7 +10,7 @@ import { existsSync } from "fs";
 loadEnv();
 
 if (!process.env.TELEGRAM_BOT_TOKEN) {
-  const botEnvPath = path.resolve(process.cwd(), ".env");
+  const botEnvPath = path.resolve(process.cwd(),  ".env");
   if (existsSync(botEnvPath)) {
     loadEnv({ path: botEnvPath, override: false });
   }
@@ -75,9 +77,6 @@ export const setupApp = async () => {
   if (isSetup) return;
   isSetup = true;
 
-  const { registerRoutes } = await import("./routes");
-  const { startTelegramBot } = await import("./services/telegram-bot-service");
-
   registerRoutes(httpServer, app);
   await startTelegramBot();
 
@@ -103,7 +102,6 @@ export const setupApp = async () => {
   // setting up all the other routes so the catch-all route
   // doesn't interfere with the other routes
   if (process.env.NODE_ENV === "production") {
-    const { serveStatic } = await import("./static");
     serveStatic(app);
   } else {
     const { setupVite } = await import("./vite");
